@@ -1,43 +1,53 @@
 //SAXPY - Single-Precision A*X Plus Y
 
 #include <stdio.h>
-#define TPB 100000
-#define ARRAY_SIZE 100000
+#include <sys/time.h>
 
+#define BLOCK_SIZE 400
+#define NUM_PARTICLES 100000
+#define NUM_ITERS 1000
 
-
-__global__ void particle_kernel(float4 *particles){
-    
-    const int i = blockIdx.x*blockDim.x + threadIdx.x;
-    float4 particle = particles[i];
-    particle.w *= (1.0 + 1e-7); //some exponential update rule
-    particle.x += particle.w;
-    particle.y += particle.w;
-    particle.z += particle.w;
-
-    //printf("GPU %d: %f, %f, %f, %f \n",i, particle.x, particle.y, particle.z, particle.w);
+struct particle{
+    float3 pos;
+    float3 v;
+};
+double cpuSecond() {
+    struct timeval tp;
+    gettimeofday(&tp,NULL);
+    return ((double)tp.tv_sec + (double)tp.tv_usec*1.e-6);
 }
 
-__host__ void verify(float4 *particles){
-    for(int i = 0; i < ARRAY_SIZE; i++){
-        float4 particle = particles[i];
-        particle.w *= (1.0 + 1e-7); //some exponential update rule
-        particle.x += particle.w;
-        particle.y += particle.w;
-        particle.z += particle.w;
+__device__ __host__ void update(struct particle *p){
+    p->v.x *= (1.0 + 1e-1);
+    p->v.y *= (1.0 + 1e-1);
+    p->v.z *= (1.0 + 1e-1);
 
-        //printf("CPU %d: %f, %f, %f, %f \n",i, particle.x, particle.y, particle.z, particle.w);
+    p->pos.x += p->v.x;
+    p->pos.y += p->v.y;
+    p->pos.z += p->v.z;
+}
+__global__ void particle_kernel(struct particle *particles){
+    
+    const int i = blockIdx.x*blockDim.x + threadIdx.x;
+
+    if (i < NUM_PARTICLES){
+        update(&particles[i]);
+    }
+
+
+}
+
+__host__ void verify(struct particle *particles){
+    for(int i = 0; i < NUM_PARTICLES; i++){
+        update(&particles[i]);
     }
 }
 
-__host__ void compare(float4 *a, float4 *b, float moe){
-    //Compare a to b using a euclidian distance metric s.t. |a - b| <= moe
+__host__ void compare(struct particle *a, struct particle *b, float moe){
+    //Compare a to b using a distance metric on particle points s.t. |a - b| <= moe
 
-    for (int i = 0; i < ARRAY_SIZE; i++){
-        float len = sqrt(pow((a[i].x - b[i].x), 2) + pow((a[i].y - b[i].y), 2) + pow((a[i].z - b[i].z), 2) + pow((a[i].w - b[i].w), 2));
-        //printf("%d: %f, %f, %f, %f \n",i, a[i].x, a[i].y, a[i].z, a[i].w);
-        //printf("%d: %f, %f, %f, %f \n",i, b[i].x, b[i].y, b[i].z, b[i].w);
-        //printf("%f", len);
+    for (int i = 0; i < NUM_PARTICLES; i++){
+        float len = sqrt(pow((a[i].pos.x - b[i].pos.x), 2) + pow((a[i].pos.y - b[i].pos.y), 2) + pow((a[i].pos.z - b[i].pos.z), 2));
         if (len >= moe){
             printf("Comparison failed w. %f accuracy.\n", moe);
             return;
@@ -47,52 +57,58 @@ __host__ void compare(float4 *a, float4 *b, float moe){
 }
 
 
-
 int main(){
-    //Host address
-    float4 *particles_h = 0, *intermediate_h;
-
-    //Device addresses
-    float4 *particles_d = 0;
+    //Host address, intermediate memory and device adderss
+    particle particles_h[NUM_PARTICLES], intermediate_h[NUM_PARTICLES];
+    particle *particles_d = 0;
 
 
     //Allocate host memory
-    particles_h    = (float4 *) malloc(ARRAY_SIZE*sizeof(float4));
-    intermediate_h = (float4 *) malloc(ARRAY_SIZE*sizeof(float4));
+    //particles_h    = (particle *) malloc(NUM_PARTICLES*sizeof(particle));
+    //intermediate_h = (particle *) malloc(ARRANUM_PARTICLESY_SIZE*sizeof(particle));
 
     // Allocate device memory
-    cudaMalloc(&particles_d, ARRAY_SIZE*sizeof(float4));
+    cudaMalloc(&particles_d, NUM_PARTICLES*sizeof(particle));
 
 
     //Populate host particles w. some uniformly distributed numbers from [0,1]
-    for(int i = 0; i < ARRAY_SIZE; i++){
-        particles_h[i] = make_float4(1,2,3,4);//make_float4((rand() % 100)/100.0, (rand() % 100)/100.0, (rand() % 100)/100.0, (rand() % 100)/100.0);
+    for(int i = 0; i < NUM_PARTICLES; i++){
+        float3 pos = make_float3((rand() % 100)/100.0, (rand() % 100)/100.0, (rand() % 100)/100.0);
+        float3 v   = make_float3((rand() % 100)/100.0, (rand() % 100)/100.0, (rand() % 100)/100.0);
+        particles_h[i].pos = pos;
+        particles_h[i].v = v;
+        //= {pos: pos,  v: v};
     }
 
 
     //Copy particles_h to device memory
-    cudaMemcpy(particles_d, particles_h, ARRAY_SIZE*sizeof(float4), cudaMemcpyHostToDevice);
+    cudaMemcpy(particles_d, particles_h, NUM_PARTICLES*sizeof(particle), cudaMemcpyHostToDevice);
 
     //Launch kernel
     printf("Computing simulation on the GPU...\n");
-    particle_kernel <<<ARRAY_SIZE/TPB, TPB>>>(particles_d);
-
+    double t = cpuSecond();
+    for(int i = 0; i < NUM_ITERS; i++){
+        particle_kernel <<<(NUM_PARTICLES + BLOCK_SIZE -1)/BLOCK_SIZE, BLOCK_SIZE>>>(particles_d);
+    }
     //Sync
     cudaDeviceSynchronize();
-    printf("Done!\n");
+    printf("Done in %f seconds!\n", cpuSecond() - t);
     
     //Run host verification
     printf("Computing simulation on the CPU...\n");
-    verify(particles_h);
-    printf("Done!\n");
+    t = cpuSecond();
+    for(int i = 0; i < NUM_ITERS; i++){
+        verify(particles_h);
+    }
+    printf("Done in %f seconds!\n", cpuSecond() - t);
 
     //Copy yd from device to xh, then compare that xh and yh are equal
     printf("Copying from device and comparing the output for device and host\n");
-    cudaMemcpy(intermediate_h, particles_d, ARRAY_SIZE*sizeof(float4), cudaMemcpyDeviceToHost);
+    cudaMemcpy(intermediate_h, particles_d, NUM_PARTICLES*sizeof(particle), cudaMemcpyDeviceToHost);
     
     compare(particles_h, intermediate_h, 1e-6);
 
     cudaFree(particles_d);
-    free(particles_h); free(intermediate_h);
+    //free(particles_h); free(intermediate_h);
     return 0;
 }
