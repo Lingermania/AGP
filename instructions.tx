@@ -1,0 +1,39 @@
+
+---------->Accessing Tegner<---------
+1. Create kerboros ticket
+
+> kinit -f krisjon@NADA.KTH.SE
+> pwd
+
+2.
+Check if ticket exists
+
+> klist -f
+
+3. ssh into env
+
+> /usr/local/bin/ssh -o GSSAPIDelegateCredentials=yes -o GSSAPIKeyExchange=yes -o GSSAPIAuthentication=yes krisjon@tegner.pdc.kth.se
+
+4. GOTO your directory
+cd /cfs/klemming/nobackup/k/krisjon
+
+
+
+
+---------->Running on tegner<-----------
+
+1. Load cuda environment
+
+> module load cuda/7.0
+
+2. Compile .cu kernel
+
+> nvcc -arch=sm_30 kernel.cu -o <name>
+
+3. Ask for gpu allocation
+
+> salloc --nodes=1 --gres=gpu:K420:1 -t 00:05:00 -A edu20.DD2360
+
+4. Run the job
+
+> srun -n 1 ./<name>
